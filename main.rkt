@@ -2,7 +2,8 @@
 
 (require racket/match
          racket/list
-         racket/string)
+         racket/string
+         racket/function)
 
 ;; Pretty-printed tables
 
@@ -16,17 +17,17 @@
          )
 
 
-(define PAD-CHAR #\space)
-(define ELIDED-CHAR #\.)
+(define *PAD-CHAR* #\space)
+(define *ELIDED-CHAR* #\.)
 
 #|
 TODO: 
 - Add cell formatting options to table-col and table-row
-  . and perhaps these should be for values only?
 - Change names of exports
 - Add contracts
 - Consolidate tests
-
+- Rules
+- Break out Cells into different module
 |#
 
 
@@ -67,15 +68,17 @@ covered by one tile index
        (tree-index<=? (cdr idx1) (cdr idx2))))
 
 ;; A Table consisting of a single cell
-(define (table-cell v #:rowspan    [rowspan 0]
-                      #:colspan    [colspan 0]
-                      #:position   [position   'left]
-                      #:margin/h   [margin/h   0]
+(define (table-cell v #:rowspan    [rowspan    0]
+                      #:colspan    [colspan    0]
+                      #:alignment  [alignment  'left]
+                      #:fill-char  [fill-char  #\space]
+                      #:pad?       [pad?       #f]
                       #:show-trim? [show-trim? #f])
   (define (shape-span n)
-    (cons-tree n (make-list n (tree-leaf 0))))
+    (tree n (make-list n (tree-leaf 0))))
   (Table
-   (list (Tile (cons null null) (cell v position margin/h show-trim?)))
+   (list (Tile (cons null null)
+               (Cell v alignment fill-char pad? show-trim?)))
    (shape-span rowspan) (shape-span colspan)))
 
 ;; Check whether a Table is a valid table
@@ -86,11 +89,6 @@ covered by one tile index
          (let ([table-indexes (map Tile-index tiling)])
            (and (is-anti-chain? table-indexes)
                 (covers? table-indexes (cross-product (tree-leaves/index row-shape) (tree-leaves/index col-shape))))))))
-
-;; Remove rows and columns that have no tile 
-(define (table-prune tbl)
-  (raise-user-error 'table-prune "Function not yet implemented"))
-
 
 
 ;; Two Tables are rowwise- (respectively, columnwise-) consistent if their row shapes (respectively, column
@@ -117,7 +115,7 @@ covered by one tile index
   ;; The final column shape
   (define col-shape
     (let ([col-shapes (map Table-col-shape tbls)])
-      (cons-tree (length col-shapes) col-shapes)))
+      (tree (length col-shapes) col-shapes)))
 
   ;; Renumber the tiles
   ;; For each tile in table n,
@@ -140,7 +138,7 @@ covered by one tile index
   ;; The final row shape.
   (define row-shape
     (let ([row-shapes (map Table-row-shape tbls)])
-      (cons-tree (length row-shapes) row-shapes)))
+      (tree (length row-shapes) row-shapes)))
 
   ;; The final column shape. NB: shape-max will raise an error if the shapes are not coherent. 
   (define col-shape
@@ -238,7 +236,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 
 |#
 
-(define (cons-tree val subtrees)
+(define (tree val subtrees)
   (cons val subtrees))
 
 (define (tree-leaf val)
@@ -251,6 +249,12 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
   (cond
     [(null? idx) (car t)]
     [else        (tree-ref (list-ref (cdr t) (car idx)) (cdr idx))]))
+
+;; Return a list of the labels along the branch indexed by idx
+(define (branch-ref t idx)
+  (cond
+    [(null? idx) (list (car t))]
+    [else (cons (car t) (branch-ref (list-ref (cdr t) (car idx)) (cdr idx)))]))
 
 ;; Assumes the reference at idx is a box
 (define (tree-set! t idx val)
@@ -286,11 +290,21 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
                             (foldr tree-leaves* acc children locs))])))
   (tree-leaves* t '() '()))
 
+;; tree-leaves/branch-vals : return a list of each sequence of values along the branches leading to the
+;; leaves
+(define (tree-leaves/branch-values t)
+  (let ([value    (car t)]
+        [children (cdr t)])
+    (cond
+      [(null? children) (list (list value))]
+      [else (map (curry cons value)
+                 (append* (map tree-leaves/branch-values children)))])))
+
 ;; shape<=? : test whether one shape is a prefix of the other
 ;; shape1 <= shape2 if
 ;; - shape1 is a singleton; or
 ;; - the values are the same; and
-;; - each child node of shape1 is a prefix (as a shape) the corresponding child node of the other
+;; - each child node of shape1 is a prefix (as a shape) of the corresponding child node of the other
 ;; Note that this is not the same condition as for a tree. In particular, if a node exists in shape1 and has at
 ;; least one child; then all children must exist in shape2.  
 ;;
@@ -323,7 +337,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
            racket/set)
 
   (define (make-tree val . subtrees)
-    (cons-tree val subtrees))
+    (tree val subtrees))
   
   (test-case "Tree tests"
     ;;      a
@@ -342,7 +356,10 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
     (check-eq? (tree-ref a-tree '()) 'a)
     (check-eq? (tree-ref a-tree '(1 0)) 'd)
     (check-true (set=? (tree-leaves/value a-tree)
-                       (map (λ (i) (tree-ref a-tree i)) (tree-leaves/index a-tree))))))
+                       (map (λ (i) (tree-ref a-tree i)) (tree-leaves/index a-tree))))
+    (check-equal? (branch-ref a-tree '(1 0)) '(a c d))
+    (check-true (set=? (tree-leaves/branch-values a-tree)
+                            '((a b) (a c d) (a c e))))))
 
 
 
@@ -363,16 +380,148 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 ;; - Leaf rows have height 1; every other row has height equal to the sum of its children. 
 
 ;; table-pretty-print : Table? -> string?
-(define (table-pretty-print tbl)
-  (string-join
-   (map string-append* (table-format tbl))
-   "\n"
-   #:after-last "\n"))
+(define (table-pretty-print tbl #:rule-maker [rule-maker default-rule-maker])
+  (let ([printed-table (if (not rule-maker)
+                           tbl
+                           (table-add-rules tbl rule-maker))])
+    (string-join
+     (map string-append* (table-format printed-table))
+     "\n"
+     #:after-last "\n")))
+
+;; Given a row index and a column index, return a character representing a rule
+;; A row-depth of #f means return a vertical rule, and likewise for column-depth
+;; if both arguments are not #f then return an "intersection" character
+(define (make-standard-rule-maker hchars vchars)
+  (let ([hv (list->vector hchars)]
+        [vv (list->vector vchars)])
+    (λ (row col)
+      (if (not col)
+          (fenced-vector-ref hv (length row))
+          (if (not row)
+              (fenced-vector-ref vv (length col))
+              (let ([r (length row)]
+                    [c (length col)])
+                (if (<= c r)
+                    (fenced-vector-ref vv c)
+                    (fenced-vector-ref hv r))))))))
+
+;; Like vector-ref, but (a) return the last element rather than out of range error; (b) start at 1
+(define (fenced-vector-ref vec pos)
+  (if (<= pos (vector-length vec))
+      (vector-ref vec (- pos 1))
+      (vector-ref vec (- (vector-length vec) 1))))
+
+(define default-rule-maker
+  (make-standard-rule-maker (string->list "=-.") (string->list "|:")) 
+  ;; (make-default-rule-maker '(#\= #\- #\.) '(#\| #\:))
+  )
+
+
+;; Add rules to a Table, producing a new (but improper!) Table. The new table may have rules which
+;; overlap existing Tiles. However, they occur after the existing Tiles in tiling,  which means the
+;; pretty-printer doesn't see them.  
+;; table-add-rules : Table? (number? number? -> char?) -> Table?
+(define (table-add-rules tbl make-rule)
+  (match-define (Table tiles row-shape col-shape) tbl)
+
+  ;; Add rows and columns to hold the rules
+  (define-values (new-row-shape new-rows updated-rows) (shape-add-between row-shape))
+  (define-values (new-col-shape new-cols updated-cols) (shape-add-between col-shape))
+
+  ;; Move the old tiles to their new row and col indices
+  (define reindexed-tiles
+    (for/list ([t (in-list tiles)])
+      (match-define (Tile (cons row col) v) t)
+      (Tile (cons (cdr (branch-ref updated-rows row))
+                  (cdr (branch-ref updated-cols col)))
+            v)))
+
+  ;; The new horizontal rules
+  (define horizontal-rule-tiles
+    (for*/list ([row (in-list new-rows)]
+                [col (in-list (map cdr (tree-leaves/branch-values updated-cols)))])  
+      (Tile (cons row col) (cell "" #:fill-char (make-rule row #f)))))
+
+  ;; The new vertical rules
+  (define vertical-rule-tiles
+    (for*/list ([row (in-list (map cdr (tree-leaves/branch-values updated-rows)))]
+                [col (in-list new-cols)])
+      (Tile (cons row col) (cell (string (make-rule #f col))))))
+
+  ;; The new crossing rules
+  (define horizontal-vertical-rule-tiles
+    (for*/list ([row (in-list new-rows)]
+                [col (in-list new-cols)])
+      (Tile (cons row col) (cell (string (make-rule row col))))))
+
+  (Table (append reindexed-tiles
+                 horizontal-rule-tiles
+                 vertical-rule-tiles
+                 horizontal-vertical-rule-tiles)
+         new-row-shape
+         new-col-shape))
+
+;; Interleave new leaves between the nodes of a shape, at all levels
+;; Returns:
+;; - (a) a new shape, including the interleaved nodes
+;; - (b) a list of the indices of the new nodes, '((1) (3) (5) ...) plus the new sub-nodes
+;; - (c) a mapping from old -> new indices
+;; The mapping in (c) is a labelled tree whose structure is isomorphic to the original shape, but
+;; whose labels are the updated index of each node
+;;
+(define (shape-add-between shp)
+  (let-values ([(new-shape new-rows updated-children) (shape-add-between* shp)])
+    (values
+     new-shape
+     new-rows
+     (tree #f updated-children))))
+
+;; Like shape-add-between except (c) is a list of the updates for child nodes.
+(define (shape-add-between* shp)
+  (match-let ([(cons N nodes) shp])
+    (cond
+      [(zero? N) (values shp '() '())]
+      [else
+       (let-values ([(new-shapes new-sub-nodes updates)
+                     (for/fold ([shps  '()]
+                                [nds   '()]
+                                [updts '()])
+                               ([node (in-list nodes)]
+                                [i    (in-naturals)])
+                       (let-values ([(new-shp new-sub-nds new-updts)
+                                     (shape-add-between* node)])
+                         (values (cons new-shp shps)
+                                 (append (map (λ (n) (cons (* 2 i) n)) new-sub-nds)
+                                         nds)
+                                 (cons (tree (* 2 i) new-updts)
+                                       updts))))])
+         (define new-N (- (* 2 N) 1))
+         (values
+          ;; The new shape (with new nodes interleaved)
+          (tree new-N (interleave (reverse new-shapes) (make-list (- N 1) '(0 . ())))) 
+          ;; The indices of the added nodes
+          (append (map list (range 1 new-N 2)) new-sub-nodes) 
+          ;; Map of old indices of existing nodes to their new indices, including this one
+          (reverse updates) 
+          ))])))
+
+;; Interleave two lists; when one is exhausted, continue with the elements of the other
+;; Recursive because xs and ys are likely to be short
+(define (interleave xs ys)
+  (if (null? xs)
+      ys
+      (if (null? ys)
+          xs
+          (cons (car xs) (cons (car ys) (interleave (cdr xs) (cdr ys)))))))
+
+
 
 ;; table-format : Table? -> [Listof [Listof string?]]
 (define (table-format tbl)
   (match-let ([(Table tiles row-shape col-shape) tbl])
-    (let ([row-heights (table-format-column-heights tbl)] ;; TODO: We don't currently use `rows`
+    (let ([row-heights (table-format-column-heights tbl)] ;; Ignored. TODO: All rows currently have
+          ;; height 1. 
           [col-widths  (table-format-row-widths tbl)])
       ;; Loop over the atomic cells of the table
       (for/list ([row (in-list (tree-leaves/index row-shape))])
@@ -393,13 +542,13 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
                (if (andmap zero? col-within-tile)
                    (if (andmap zero? row-within-tile)
                        (format-cell (Tile-value tile) (tree-ref col-widths tile-col))
-                       (format-cell (cell "" 'left 0 #f) (tree-ref col-widths tile-col)))
-                   (format-cell (cell "" 'left 0 #f) 0))))))))))
+                       (format-cell (cell "") (tree-ref col-widths tile-col)))
+                   (format-cell (cell "") 0))))))))))
 
 
 ;; Return a labelled tree whose labels are the computed row widths at each level
 (define (table-format-row-widths tbl)
-  (match-let ([(Table tiles row-shape col-shape) tbl])
+  (match-let ([(Table tiles _ col-shape) tbl])
     ;; Assign each node in a col-shape the maximum of all widths of tiles at that level 
     (define *widths* (tree->boxtree col-shape 0))
     (for ([tile (in-list tiles)])
@@ -420,7 +569,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 
 ;; Return a labelled tree whose labels are the column heights at each level
 (define (table-format-column-heights tbl)
-  (match-let ([(Table tiles row-shape col-shape) tbl])
+  (match-let ([(Table _ row-shape _) tbl])
     (let sum-heights ([t row-shape])
       (let ([children (cdr t)])
         (cond
@@ -431,8 +580,8 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 
 ;; Make a boxtree (initialised to `val` at each node) having the same shape as a labelled tree `t`
 (define (tree->boxtree t val)
-  (cons-tree (box val)
-             (map (λ (c) (tree->boxtree c val)) (cdr t))))
+  (tree (box val)
+        (map (λ (c) (tree->boxtree c val)) (cdr t))))
 
 (define (boxtree->tree bt)
   (cons (unbox (car bt))
@@ -447,17 +596,17 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
   (define *tbl1*
     (Table
      (list
-      (Tile '(() 0) (cell "a" 'left 0 #f))
-      (Tile '(() 1) (cell "b" 'left 0 #f))
-      (Tile '(() 2) (cell "c" 'left 0 #f)))
+      (Tile '(() 0) (cell "a"))
+      (Tile '(() 1) (cell "b"))
+      (Tile '(() 2) (cell "c")))
      '(0)
      '(3 (0) (0) (0))))
   (define *tbl2*
     (Table
      (list
-      (Tile '((0)) (cell "a" 'left 0 #f))
-      (Tile '((1)) (cell "b" 'left 0 #f))
-      (Tile '((2)) (cell "c" 'left 0 #f)))
+      (Tile '((0)) (cell "a"))
+      (Tile '((1)) (cell "b"))
+      (Tile '((2)) (cell "c")))
      '(3 (0) (0) (0))
      '(0)))
   (check-equal? (table-row "a" "b" "c") *tbl1*)
@@ -495,20 +644,24 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 ;; Formatted cells
 ;;
 ;; Format single-row cells to a given width, trimming or padding as required
-;; - possibly with a margin
-;; - left, right, or centred
-;; - possibly showing that characters were omitted
+;; - aligned left, right, or centred
+;; - optional single-character padding to right, left, or both (if aligned left, right, or centred respectively)
+;; - optionally, showing that characters were omitted
 
 (struct Cell (content
-              position            ; either 'left, 'right, or 'centre
-              margin/h            ; exact-nonnegative-integer?
+              alignment           ; either 'left, 'right, or 'centre
+              fill-char           ; char?
+              pad?                ; boolean?
               show-trim?          ; boolean? 
               ) #:transparent)
 
-;; A Cell having a default format
-(define (cell s position margin/h show-trim?) 
-  (Cell s position margin/h show-trim?))
-
+;; Convenience constructor with named, default arguments
+(define (cell s
+              #:alignment  [alignment  'left]
+              #:fill-char  [fill-char  #\space]
+              #:pad?       [pad?       #f]
+              #:show-trim? [show-trim? #f]) 
+  (Cell s alignment fill-char pad? show-trim?))
 
 ;; Produce the contents of c as a formatted string of given width
 (define (format-cell c width)
@@ -518,55 +671,73 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
       [(< width nw) (format-cell/trim c width)]
       [else         (format-cell/asis c)])))
 
-;; The width of cell just necessary to fit the contents and the margin
+;; The width of cell just necessary to fit the contents and the padding
 (define (cell-natural-width c)
   (+ (string-length (Cell-content c))
-     (* 2 (Cell-margin/h c))))
+     (if (Cell-pad? c)
+         (match (Cell-alignment c)
+           ['left   1]
+           ['right  1]
+           ['centre 2])
+         0)))
 
 ;; Format a cell into a space wider than its natural width
 (define (format-cell/fill c n-fill)
-  (let ([s      (Cell-content c)]
-        [margin (padding (Cell-margin/h c))])
-    (match (Cell-position c)
-      ['left  (string-append margin                   s (padding n-fill) margin)]
-      ['right (string-append margin (padding n-fill)  s                  margin)]
+  (let ([s       (Cell-content c)]
+        [pad     (if (Cell-pad? c)
+                     (string *PAD-CHAR*)
+                     "")]
+        [fill    (make-string n-fill (Cell-fill-char c))])
+    (match (Cell-alignment c)
+      ['left  (string-append s fill pad)]
+      ['right (string-append pad fill s)]
       [else   (let ([n-lfill (quotient n-fill 2)])
-                (string-append
-                             margin (padding n-lfill) s (padding (- n-fill n-lfill)) margin))])))
+                (let ([lfill (make-string n-lfill (Cell-fill-char c))]
+                      [rfill (make-string (- n-fill n-lfill) (Cell-fill-char c))])
+                  (string-append pad lfill s rfill pad)))])))
 
 ;; Format a cell into a space narrower than its natural width
-;; Margins are not deleted until all the contents have gone
+;; A trim-character replaces the final 3 characters, unless there are fewer than 3 characters
+;; remaining, in which case it replaces half the characters
+;; Padding is not deleted until all the content has gone
+;; Alignment is ignored, apart from its effect on padding (ie, the trimming is always done from the right)
 (define (format-cell/trim c w)
-  (let* ([n-margin (Cell-margin/h c)]
-         [n-s      (- w (* 2 n-margin))])
-    (cond
-      [(<= n-s 0) (padding w)] ; only margin is left after trim
-      [else 
-       (define margin (padding n-margin))
-       (define s      (Cell-content c))
-       (define slen   (string-length s))
-       (define n-elide
-         (if (Cell-show-trim? c)
-             (min 3 (quotient n-s 2))
-             0))  
-       (match (Cell-position c)
-         ['right (string-append margin (elision n-elide) (substring s (- slen (- n-s n-elide))) margin)]
-         [else   (string-append margin (substring s 0 (- n-s n-elide)) (elision n-elide) margin)])])))
+  (if (not (Cell-pad? c))
+      (format-cell/trim/no-pad c w)
+      (let ([npad-chars
+             (match (Cell-alignment c)
+               [(or 'left 'right) 1]
+               ['centre           2])])
+        (if (<= w npad-chars)
+            (make-string w *PAD-CHAR*)
+            (let ([pad (string *PAD-CHAR*)]
+                  [s (format-cell/trim/no-pad c (- w npad-chars))])
+              (match (Cell-alignment c)
+                ['left   (string-append s pad)]
+                ['right  (string-append pad s)]
+                ['centre (string-append pad s pad)]))))))
+  
+(define (format-cell/trim/no-pad c w)
+  (let* ([s       (Cell-content c)]
+         [n-elide (if (Cell-show-trim? c)
+                      (min 3 (quotient w 2))
+                      0)])  
+    (string-append (substring s 0 (- w n-elide)) (elision n-elide))))
 
 ;; Format a string into precisely its natural width
 (define (format-cell/asis c)
-  (let ([margin (make-string (Cell-margin/h c) PAD-CHAR)])
-    (string-append margin
-                   (Cell-content c)
-                   margin)))
-
-;; A string containing the pad character
-(define (padding n)
-  (make-string n PAD-CHAR))
+  (let ([s (Cell-content c)])
+    (if (not (Cell-pad? c))
+        s
+        (let ([pad (string *PAD-CHAR*)])
+          (match (Cell-alignment c)
+            ['left    (string-append s pad)]
+            ['right   (string-append pad s)]
+            ['centre  (string-append pad s pad)])))))
 
 ;; A string containing the "elision" character
 (define (elision n)
-  (make-string n ELIDED-CHAR))
+  (make-string n *ELIDED-CHAR*))
 
 
 
@@ -577,34 +748,32 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
   (require rackunit)
   ;;
   (test-case "Format default cells"
-    (define test-cell (cell "test" 'left 0 #f))
+    (define test-cell (cell "test"))
     (check-equal? (format-cell test-cell 4) "test")
     (check-equal? (format-cell test-cell 5) "test ")
     (check-equal? (format-cell test-cell 3) "tes"))
   ;;
   (test-case "Format padded cells"
-    (define padded-cell (cell "test" 'left 2 #f))
-    (check-equal? (format-cell padded-cell 6) "  te  ")
-    (check-equal? (format-cell padded-cell 7) "  tes  ")
-    (check-equal? (format-cell padded-cell 3) "   "))
+    (define padded-cell (cell "test" #:pad? #t))
+    (check-equal? (format-cell padded-cell 6) "test  ")
+    (check-equal? (format-cell padded-cell 4) "tes ")
+    (check-equal? (format-cell padded-cell 2) "t "))
   ;;
-  (test-case "Format justified cells"
-   (define right-cell (cell "test" 'right 0 #f))
-   (define centred-cell (cell "test" 'centre 0 #f))
+  (test-case "Format aligned cells"
+   (define right-cell (cell "test" #:alignment 'right))
+   (define centred-cell (cell "test" #:alignment 'centre))
    (check-equal? (format-cell right-cell 5) " test")
-   (check-equal? (format-cell right-cell 3) "est")
+   (check-equal? (format-cell right-cell 3) "tes")
    (check-equal? (format-cell centred-cell 6) " test ")
    (check-equal? (format-cell centred-cell 5) "test ")
    (check-equal? (format-cell centred-cell 3) "tes"))
   ;;
-  (test-case "Trimmed cells"
-    (define dots-cell (cell "alongtext" 'left 0 #t))
-    (define dots-cell-right (cell "alongtext" 'right 0 #t))
+  (test-case "Format trimmed cells"
+    (define dots-cell (cell "alongtext" #:show-trim? #t))
+    (define dots-cell-right (cell "alongtext" #:alignment 'right #:show-trim? #t))
     ;;
     (check-equal? (format-cell dots-cell 6) "alo...")
     (check-equal? (format-cell dots-cell 5) "alo..")
     (check-equal? (format-cell dots-cell 4) "al..")
     ;;
-    (check-equal? (format-cell dots-cell-right 6) "...ext")
-    (check-equal? (format-cell dots-cell-right 5) "..ext")
-    (check-equal? (format-cell dots-cell-right 4) "..xt")))
+))
