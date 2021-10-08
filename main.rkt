@@ -633,7 +633,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
       (table-colwise-bind
        (list
         (table-cell "H1")
-        (table-cell "H2" #:align 'right #:colspan 2)))
+        (table-cell "H2" #:colspan 2)))
       (table-rowwise-bind
        (list
         (table-colwise-bind
