@@ -70,7 +70,7 @@ covered by one tile index
 ;; A Table consisting of a single cell
 (define (table-cell v #:rowspan    [rowspan    0]
                       #:colspan    [colspan    0]
-                      #:alignment  [alignment  'left]
+                      #:align      [alignment  'left]
                       #:fill-char  [fill-char  #\space]
                       #:pad?       [pad?       #f]
                       #:show-trim? [show-trim? #f])
@@ -198,7 +198,7 @@ covered by one tile index
           (is-anti-chain? idxs)))))
 
 ;; Check that idx neither covers nor is covered by any of the idxs 
-  (define (no-overlaps idx idxs)
+(define (no-overlaps idx idxs)
     (andmap
      (λ (i)
        (not (or (table-index<=? i idx) (table-index<=? idx i)))
@@ -367,8 +367,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 ;; ---------------------------------------------------------------------------------------------------
 ;; Formatted tables (version 0.1)
 ;;  
-;; Lay out a table, with no rules. Main challenge is to assign widths to leaf nodes of the column
-;; shape; and heights to the leaf nodes of the row shape.
+;; Lay out a table, with rules. 
 ;;
 ;; Column shape:
 ;; - Leaf nodes get their maximum of the natural widths of all leaf nodes in that columns;
@@ -380,7 +379,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 ;; - Leaf rows have height 1; every other row has height equal to the sum of its children. 
 
 ;; table-pretty-print : Table? -> string?
-(define (table-pretty-print tbl #:rule-maker [rule-maker default-rule-maker])
+(define (table-pretty-print tbl #:rule-maker [rule-maker (default-rule-maker)])
   (let ([printed-table (if (not rule-maker)
                            tbl
                            (table-add-rules tbl rule-maker))])
@@ -406,28 +405,32 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
                     (fenced-vector-ref vv c)
                     (fenced-vector-ref hv r))))))))
 
-;; Like vector-ref, but (a) return the last element rather than out of range error; (b) start at 1
+;; Like vector-ref, but return the last element rather than out of range error
 (define (fenced-vector-ref vec pos)
-  (if (<= pos (vector-length vec))
-      (vector-ref vec (- pos 1))
+  (if (< pos (vector-length vec))
+      (vector-ref vec pos)
       (vector-ref vec (- (vector-length vec) 1))))
 
-(define default-rule-maker
-  (make-standard-rule-maker (string->list "=-.") (string->list "|:")) 
-  ;; (make-default-rule-maker '(#\= #\- #\.) '(#\| #\:))
-  )
+(define (default-rule-maker)
+  (make-vh-rule-maker "-" "|"))
 
+;; make-vh-rule-maker : string? string? -> procedure?
+(define (make-vh-rule-maker hchars vchars)
+  (make-standard-rule-maker (append (string->list hchars) '(#f))
+                            (append (string->list vchars) '(#f))))
 
 ;; Add rules to a Table, producing a new (but improper!) Table. The new table may have rules which
 ;; overlap existing Tiles. However, they occur after the existing Tiles in tiling,  which means the
 ;; pretty-printer doesn't see them.  
-;; table-add-rules : Table? (number? number? -> char?) -> Table?
+;; table-add-rules : Table? proc? -> Table?
 (define (table-add-rules tbl make-rule)
   (match-define (Table tiles row-shape col-shape) tbl)
 
   ;; Add rows and columns to hold the rules
-  (define-values (new-row-shape new-rows updated-rows) (shape-add-between row-shape))
-  (define-values (new-col-shape new-cols updated-cols) (shape-add-between col-shape))
+  (define-values (new-row-shape new-rows updated-rows)
+    (shape-add-between row-shape (λ (r) (make-rule r #f))))
+  (define-values (new-col-shape new-cols updated-cols)
+    (shape-add-between col-shape (λ (c) (make-rule #f c))))
 
   ;; Move the old tiles to their new row and col indices
   (define reindexed-tiles
@@ -441,19 +444,19 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
   (define horizontal-rule-tiles
     (for*/list ([row (in-list new-rows)]
                 [col (in-list (map cdr (tree-leaves/branch-values updated-cols)))])  
-      (Tile (cons row col) (cell "" #:fill-char (make-rule row #f)))))
+      (Tile (cons row col) (cell "" #:fill-char (make-rule (drop-right row 1) #f)))))
 
   ;; The new vertical rules
   (define vertical-rule-tiles
     (for*/list ([row (in-list (map cdr (tree-leaves/branch-values updated-rows)))]
                 [col (in-list new-cols)])
-      (Tile (cons row col) (cell (string (make-rule #f col))))))
+      (Tile (cons row col) (cell (string (make-rule #f (drop-right col 1)))))))
 
   ;; The new crossing rules
   (define horizontal-vertical-rule-tiles
     (for*/list ([row (in-list new-rows)]
                 [col (in-list new-cols)])
-      (Tile (cons row col) (cell (string (make-rule row col))))))
+      (Tile (cons row col) (cell (string (make-rule (drop-right row 1) (drop-right col 1)))))))
 
   (Table (append reindexed-tiles
                  horizontal-rule-tiles
@@ -470,41 +473,51 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 ;; The mapping in (c) is a labelled tree whose structure is isomorphic to the original shape, but
 ;; whose labels are the updated index of each node
 ;;
-(define (shape-add-between shp)
-  (let-values ([(new-shape new-rows updated-children) (shape-add-between* shp)])
+;; splice? should be a function of an index. If splice? returns #f then no nodes are inserted between
+;; the children of this particular node.
+(define (shape-add-between shp splice?)
+  (let-values ([(new-shape new-rows updated-children) (shape-add-between* shp '() splice?)])
     (values
      new-shape
      new-rows
      (tree #f updated-children))))
 
 ;; Like shape-add-between except (c) is a list of the updates for child nodes.
-(define (shape-add-between* shp)
+;; here : the (old) index of the current node, reversed
+(define (shape-add-between* shp here splice?)
   (match-let ([(cons N nodes) shp])
     (cond
       [(zero? N) (values shp '() '())]
       [else
-       (let-values ([(new-shapes new-sub-nodes updates)
-                     (for/fold ([shps  '()]
-                                [nds   '()]
-                                [updts '()])
-                               ([node (in-list nodes)]
-                                [i    (in-naturals)])
-                       (let-values ([(new-shp new-sub-nds new-updts)
-                                     (shape-add-between* node)])
-                         (values (cons new-shp shps)
-                                 (append (map (λ (n) (cons (* 2 i) n)) new-sub-nds)
-                                         nds)
-                                 (cons (tree (* 2 i) new-updts)
-                                       updts))))])
-         (define new-N (- (* 2 N) 1))
-         (values
-          ;; The new shape (with new nodes interleaved)
-          (tree new-N (interleave (reverse new-shapes) (make-list (- N 1) '(0 . ())))) 
-          ;; The indices of the added nodes
-          (append (map list (range 1 new-N 2)) new-sub-nodes) 
-          ;; Map of old indices of existing nodes to their new indices, including this one
-          (reverse updates) 
-          ))])))
+       (let ([splice-here? (splice? (reverse here))])
+         ;; Update the children of this node
+         (let-values ([(updated-children children-new-nodes children-updated-shapes)
+                       (for/fold ([cs '()] 
+                                  [ns '()]
+                                  [us '()])
+                                 ([node (in-list nodes)]
+                                  [i    (in-naturals)])
+                         (let-values ([(new-child new-nds new-updts)
+                                       (shape-add-between* node (cons i here) splice?)])
+                           (let ([ref (if splice-here? (* 2 i) i)])
+                             (values (cons new-child cs)
+                                     (append (map (λ (n) (cons ref n)) new-nds) ns)
+                                     (cons (tree ref new-updts) us)))))])
+           (if splice-here?
+               ;; Add in new nodes 
+               (values
+                ;; (a) The new shape (with new nodes interleaved)
+                (tree (- (* 2 N) 1) (interleave (reverse updated-children) (make-list (- N 1) (tree-leaf 0))))
+                ;; (b) The indices of the added nodes
+                (append (map list (range 1 (- (* 2 N) 1) 2)) children-new-nodes) 
+                ;; (c) Map of old indices of existing nodes to their new indices, including this one
+                (reverse children-updated-shapes))
+               ;; Return the children, but don't add in new nodes
+               (values ; else no new nodes added
+                (tree N (reverse updated-children))
+                children-new-nodes
+                (reverse children-updated-shapes)))))])))
+
 
 ;; Interleave two lists; when one is exhausted, continue with the elements of the other
 ;; Recursive because xs and ys are likely to be short
@@ -620,7 +633,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
       (table-colwise-bind
        (list
         (table-cell "H1")
-        (table-cell "H2" #:colspan 2)))
+        (table-cell "H2" #:align 'right #:colspan 2)))
       (table-rowwise-bind
        (list
         (table-colwise-bind
@@ -657,7 +670,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 
 ;; Convenience constructor with named, default arguments
 (define (cell s
-              #:alignment  [alignment  'left]
+              #:align      [alignment  'left]
               #:fill-char  [fill-char  #\space]
               #:pad?       [pad?       #f]
               #:show-trim? [show-trim? #f]) 
@@ -760,8 +773,8 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
     (check-equal? (format-cell padded-cell 2) "t "))
   ;;
   (test-case "Format aligned cells"
-   (define right-cell (cell "test" #:alignment 'right))
-   (define centred-cell (cell "test" #:alignment 'centre))
+   (define right-cell (cell "test" #:align 'right))
+   (define centred-cell (cell "test" #:align 'centre))
    (check-equal? (format-cell right-cell 5) " test")
    (check-equal? (format-cell right-cell 3) "tes")
    (check-equal? (format-cell centred-cell 6) " test ")
@@ -770,7 +783,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
   ;;
   (test-case "Format trimmed cells"
     (define dots-cell (cell "alongtext" #:show-trim? #t))
-    (define dots-cell-right (cell "alongtext" #:alignment 'right #:show-trim? #t))
+    (define dots-cell-right (cell "alongtext" #:align 'right #:show-trim? #t))
     ;;
     (check-equal? (format-cell dots-cell 6) "alo...")
     (check-equal? (format-cell dots-cell 5) "alo..")
