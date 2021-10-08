@@ -2,7 +2,7 @@
 @require[@for-label[mondrian
                     racket/base]]
 
-@title{mondrian}
+@title{Mondrian}
 @author{James Geddes}
 
 @defmodule[mondrian]
