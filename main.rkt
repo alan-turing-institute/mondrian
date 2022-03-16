@@ -8,7 +8,8 @@
 
 ;; Pretty-printed tables
 
-(provide table-cell 
+(provide Table?
+         table-cell 
          table-row
          table-col
          table-rowwise-bind
