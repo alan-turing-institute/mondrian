@@ -417,7 +417,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 (define (default-rule-maker)
   (make-standard-rule-maker "-" "|"))
 
-;; make-vh-rule-maker : string? string? -> procedure?
+;; make-standard-rule-maker : string? string? -> procedure?
 (define (make-standard-rule-maker hchars vchars)
   (make-standard-rule-maker* (append (string->list hchars) '(#f))
                             (append (string->list vchars) '(#f))))
