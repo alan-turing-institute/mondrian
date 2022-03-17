@@ -26,8 +26,7 @@ structure. Individual cells of the table may span several rows or columns.
 |---+---|
 | c | d |
 |---+---|
-}
-@;{
+
 |-------+-------|
 |   A   |   B   |
 |---+---+---+---|
