@@ -1,3 +1,4 @@
+
 #lang racket/base
 
 (require racket/match
@@ -7,13 +8,15 @@
 
 ;; Pretty-printed tables
 
-(provide table-cell 
+(provide Table?
+         table-cell 
          table-row
          table-col
          table-rowwise-bind
          table-colwise-bind
          table-format
          table-pretty-print
+         make-standard-rule-maker
          )
 
 
@@ -391,7 +394,7 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
 ;; Given a row index and a column index, return a character representing a rule
 ;; A row-depth of #f means return a vertical rule, and likewise for column-depth
 ;; if both arguments are not #f then return an "intersection" character
-(define (make-standard-rule-maker hchars vchars)
+(define (make-standard-rule-maker* hchars vchars)
   (let ([hv (list->vector hchars)]
         [vv (list->vector vchars)])
     (λ (row col)
@@ -412,11 +415,11 @@ A "boxtree" is a labelled, ordered tree, where the labels are boxes.
       (vector-ref vec (- (vector-length vec) 1))))
 
 (define (default-rule-maker)
-  (make-vh-rule-maker "-" "|"))
+  (make-standard-rule-maker "-" "|"))
 
-;; make-vh-rule-maker : string? string? -> procedure?
-(define (make-vh-rule-maker hchars vchars)
-  (make-standard-rule-maker (append (string->list hchars) '(#f))
+;; make-standard-rule-maker : string? string? -> procedure?
+(define (make-standard-rule-maker hchars vchars)
+  (make-standard-rule-maker* (append (string->list hchars) '(#f))
                             (append (string->list vchars) '(#f))))
 
 ;; Add rules to a Table, producing a new (but improper!) Table. The new table may have rules which
