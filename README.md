@@ -1,5 +1,5 @@
 mondrian
 ========
 
-Mondrian is a Racket library for functional tables with ASCII pretty printing. 
+Mondrian is a Racket library for functional tables with textual pretty printing. 
 
