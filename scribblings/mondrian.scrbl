@@ -1,5 +1,8 @@
 #lang scribble/manual
 @require[scribble/example
+         scribble-math/dollar
+         (prefix-in pict- pict) 
+         pict/tree-layout
          mondrian]
 @require[@for-label[mondrian
                     racket/base]]
@@ -57,9 +60,10 @@ structure. Individual cells of the table may span several rows or columns.
      #:rule-maker (make-standard-rule-maker "-" "|:")))
 ]
 
-Mondrian can often tell which cells span multiple rows and columns. Note that in
-the example above, the cells marked `A' and `B' span two columns each, and the
-cell marked `Y' spans two rows. Furthermore, the cell marked `G' also spans two
+Mondrian can often tell which cells span multiple rows and columns. In the
+example above, the cells marked `A' and `B' span two columns each, and the cell
+marked `Y' spans two rows, even though these cells were not explicitly
+constructed as spanning cells. In addition, the cell marked `G' also spans two
 columns even though it is not a traditional `column header.'
 
 @section{Creating tables}
@@ -122,7 +126,7 @@ tables in @racket[cells], which must be @tech{coherent}, into a column.
 }
 
 
-@section{Formatting}
+@section{Formatting tables}
 
 @defproc[(table-format [table Table?]) (listof (listof string?))]{
 
@@ -195,5 +199,94 @@ the hierarchy of columns; likewise for @racket[vchars].
 
 
 @section{Theory}
+
+@(use-mathjax)
+
+The kinds of tables that mondrian deals with are two-dimensional, rectangular
+arrays of cells where certain cells might span more than one row or
+column. However, not all such arrangements are allowed: the rows (or columns)
+spanned must be `consistent' throughout the table. In effect, there is a tree
+structure on both the rows and the columns which the cells must respect. We call
+such a consistent structure a `@tech{mondrian}.'
+
+For example, the following two rectangular arrangements are @emph{not} legal
+tables:
+@verbatim{
+|-------+-------|               |-------+-------|
+|   A   |   B   |               |   A   |   B   |
+|   :---+---+---|               |---+---+---+---|
+|   : b | c : d |               | a : b | c : d | 
+|---+---+---+---|               |---+---+---+---|
+| e : f | g : h |               | e :   C   : h |
+|---+---+---+---|               |---+---+---+---|
+}
+The problem with the first one is that cell `A' is not rectangular; the
+problem with the second is that the column structure is `inconsistent' so that
+cell `C' overlaps cells `A' and `B'.
+
+On the other hand, the following table is legal:
+@verbatim{
+|---------+---------| 
+|   aA    |   bA    | 
+|----:----+----+----| 
+|    : dC | eC : fC | 
+| cB +----+----+----| 
+|    : dD | eD : fD | 
+|----+----+----+----| 
+}
+@(define (nd c)
+   (pict-cc-superimpose (pict-disk 20 #:color "White" #:border-color "Gray")
+                        (pict-text c)))
+
+The columns have a hierarchical structure described by the tree:
+@centered[
+ (naive-layered
+  (tree-layout #:pict (nd "")
+    (tree-edge (tree-layout #:pict (nd "a")
+                 (tree-edge (tree-layout #:pict (nd "c")))
+                 (tree-edge (tree-layout #:pict (nd "d")))))
+    (tree-edge (tree-layout #:pict (nd "b")
+                 (tree-edge (tree-layout #:pict (nd "e")))
+                 (tree-edge (tree-layout #:pict (nd "f")))))))]
+
+and the rows by the tree:
+@centered[
+ (naive-layered
+  (tree-layout #:pict (nd "")
+    (tree-edge (tree-layout #:pict (nd "A")))
+    (tree-edge (tree-layout #:pict (nd "B")
+                 (tree-edge (tree-layout #:pict (nd "C")))
+                 (tree-edge (tree-layout #:pict (nd "D")))))))]
+
+Any legal cell in the table is identified by a pair consisting of a node of the
+column structure and a node of the row structure. However, not every collection
+of legal cells is a legal table: the cells must (a) not overlap; and (b) cover
+the entire rectangular area.
+
+Let @($ "R") and @($ "C") be finite trees (representing a row and column
+structure respectively). For, say, @${r_1, r_2 \in R}, we write @${r_1 \leq r_2}
+if @${r_1} is closer to the root of the tree than @${r_2}. Denote by @${R
+\times_\leq C} the partial order on @${R\times C} given by the rule @${(r, c)
+\leq (r', c')} if and only if @${r \leq r'} and @${c \leq c'}.
+
+A @deftech{mondrian} is a maximal antichain in @${R \times_\leq C}. That is, a
+mondrian is a subset, @${M\subset R\times_\leq C}, such that:
+
+@itemlist[#:style 'ordered
+
+@item{No two elements of @${M} are comparable; and}
+
+@item{Any other @${c\in R\times_\leq C} is comparable to some element of
+@${M}.}]
+
+The first condition ensures that no two cells overlap; the second ensures that,
+taken together, the cells cover the entire table.
+
+The functions @racket[table-row], @racket[table-col], and so on create new
+tables by joining existing tables, either side-by-side or top-to-bottom. Two
+tables joined in this way must have a consistent row- or column-structure. The
+tables are said to be row-wise (or column-wise) @deftech{coherent} if one of
+their row (or column) structures is a prefix of the other. In this case,
+mondrian extends the smaller tree from the leaves.
 
 
