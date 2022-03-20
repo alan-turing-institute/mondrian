@@ -269,6 +269,9 @@ if @${r_1} is closer to the root of the tree than @${r_2}. Denote by @${R
 \times_\leq C} the partial order on @${R\times C} given by the rule @${(r, c)
 \leq (r', c')} if and only if @${r \leq r'} and @${c \leq c'}.
 
+
+TODO: Fix the following, which is wrong.
+
 A @deftech{mondrian} is a maximal antichain in @${R \times_\leq C}. That is, a
 mondrian is a subset, @${M\subset R\times_\leq C}, such that:
 
