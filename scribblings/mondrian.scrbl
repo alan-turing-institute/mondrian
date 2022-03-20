@@ -269,21 +269,24 @@ if @${r_1} is closer to the root of the tree than @${r_2}. Denote by @${R
 \times_\leq C} the partial order on @${R\times C} given by the rule @${(r, c)
 \leq (r', c')} if and only if @${r \leq r'} and @${c \leq c'}.
 
+An element @${c\in R \times_\leq C} is a potential cell in the table. This cell
+may cover other possible cells. By the @defterm{interior} of @${c}, written
+@${\mathcal{I}(c)}, is meant the set @${\mathcal{I}(c)\equiv \{ i\in
+R\times_\leq C\mid c\leq i\}}. Note that the interior of a cell also includes
+the cell.
 
-TODO: Fix the following, which is wrong.
-
-A @deftech{mondrian} is a maximal antichain in @${R \times_\leq C}. That is, a
-mondrian is a subset, @${M\subset R\times_\leq C}, such that:
+A @deftech{mondrian} is a set, @${M\subset R\times_\leq C}, such that:
 
 @itemlist[#:style 'ordered
 
-@item{No two elements of @${M} are comparable; and}
+@item{For any two elements @${m, n\in M}, we have @${\mathcal{I}(m)\cap
+\mathcal{I}(n)=\emptyset}; and}
 
-@item{Any other @${c\in R\times_\leq C} is comparable to some element of
-@${M}.}]
+@item{@${M} is maximal in the sense that it is not a proper subset of any other
+set satisfying the first condition.}]
 
 The first condition ensures that no two cells overlap; the second ensures that,
-taken together, the cells cover the entire table.
+taken together, the cells cover the entire table. 
 
 The functions @racket[table-row], @racket[table-col], and so on create new
 tables by joining existing tables, either side-by-side or top-to-bottom. Two
